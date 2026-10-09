@@ -12,7 +12,7 @@
 const int PORT = 9999;
 const std::string DB_FILE = "chat_db.txt";
 
-std::vector<std::string> history;   // хранит ТОЛЬКО зашифрованные строки
+std::vector<std::string> history;
 std::mutex historyMtx;
 std::vector<int> clients;
 std::mutex clientsMtx;
@@ -33,24 +33,30 @@ void sendAll(const std::string& t) {
 }
 void handleClient(int sock) {
     { std::lock_guard<std::mutex> lk(clientsMtx); clients.push_back(sock); }
+    std::string acc;          // НОВОЕ: копилка для сборки длинных строк
+    char buf[8192];
     while (true) {
-        char buf[8192];
-        memset(buf, 0, sizeof(buf));
-        int n = recv(sock, buf, sizeof(buf) - 1, 0);
+        int n = recv(sock, buf, sizeof(buf), 0);
         if (n <= 0) break;
-        std::string req(buf);
-        if (req == "/history") {
-            std::string reply;
-            { std::lock_guard<std::mutex> lk(historyMtx);
-              for (const std::string& s : history) reply += s + "\n"; }
-            if (reply.empty()) reply = "История пуста\n";
-            send(sock, reply.c_str(), reply.size(), 0);
-        } else if (req == "/clear") {
-            { std::lock_guard<std::mutex> lk(historyMtx); history.clear(); saveHistory(); }
-            sendAll("=== сервер очистил чат ===\n");
-        } else {
-            { std::lock_guard<std::mutex> lk(historyMtx); history.push_back(req); saveHistory(); }
-            sendAll(req + "\n");
+        acc.append(buf, n);
+        size_t p;
+        while ((p = acc.find('\n')) != std::string::npos) {
+            std::string req = acc.substr(0, p);
+            acc.erase(0, p + 1);
+            if (req.empty()) continue;
+            if (req == "/history") {
+                std::string reply;
+                { std::lock_guard<std::mutex> lk(historyMtx);
+                  for (const std::string& s : history) reply += s + "\n"; }
+                if (reply.empty()) reply = "История пуста\n";
+                send(sock, reply.c_str(), reply.size(), 0);
+            } else if (req == "/clear") {
+                { std::lock_guard<std::mutex> lk(historyMtx); history.clear(); saveHistory(); }
+                sendAll("=== сервер очистил чат ===\n");
+            } else {
+                { std::lock_guard<std::mutex> lk(historyMtx); history.push_back(req); saveHistory(); }
+                sendAll(req + "\n");
+            }
         }
     }
     { std::lock_guard<std::mutex> lk(clientsMtx);
@@ -59,7 +65,7 @@ void handleClient(int sock) {
 }
 int main() {
     loadHistory();
-    std::cout << "=== СЕРВЕР Ludarex v1.3 (слепой) === строк: " << history.size() << "\n";
+    std::cout << "=== СЕРВЕР Ludarex v1.4 === строк: " << history.size() << "\n";
     int ss = socket(AF_INET, SOCK_STREAM, 0);
     int yes = 1; setsockopt(ss, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
     sockaddr_in a{}; a.sin_family = AF_INET; a.sin_addr.s_addr = INADDR_ANY; a.sin_port = htons(PORT);
