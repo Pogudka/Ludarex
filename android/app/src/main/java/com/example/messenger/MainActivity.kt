@@ -6,6 +6,9 @@ import android.os.Handler
 import android.os.Looper
 import android.widget.*
 import java.net.Socket
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -42,6 +45,10 @@ class MainActivity : Activity() {
     private lateinit var msgField: EditText
     @Volatile private var out: java.io.OutputStream? = null
     private val buf = StringBuilder()
+    private var myName = "Аноним"
+    private var myPass = ""
+
+    private fun now() = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -59,13 +66,15 @@ class MainActivity : Activity() {
 
         connectBtn.setOnClickListener {
             val ip = ipField.text.toString()
-            val name = nameField.text.toString().ifEmpty { "Аноним" }
+            myName = nameField.text.toString().ifEmpty { "Аноним" }
+            myPass = keyField.text.toString()
             Thread {
                 try {
                     val s = Socket(ip, 9999)
                     out = s.getOutputStream()
-                    out!!.write(name.toByteArray()); out!!.flush()
                     handler.post { log.append("=== подключено ===\n") }
+                    val join = "=== $myName зашёл в чат ==="
+                    sendLine(if (myPass.isEmpty()) join else Crypto.enc(myPass, join))
                     val b = ByteArray(8192)
                     while (true) {
                         val n = s.getInputStream().read(b)
@@ -80,14 +89,19 @@ class MainActivity : Activity() {
         }
         sendBtn.setOnClickListener {
             val t = msgField.text.toString()
-            val o = out
-            if (t.isNotEmpty() && o != null) {
-                val pass = keyField.text.toString()
-                val payload = if (t.startsWith("/") || pass.isEmpty()) t else Crypto.enc(pass, t)
-                Thread { try { o.write(payload.toByteArray()); o.flush() } catch (_: Exception) {} }.start()
-                msgField.setText("")
+            if (t.isEmpty()) return@setOnClickListener
+            if (t.startsWith("/") || myPass.isEmpty()) {
+                sendLine(t)
+            } else {
+                sendLine(Crypto.enc(myPass, "[${now()}] [$myName] $t"))
             }
+            msgField.setText("")
         }
+    }
+
+    private fun sendLine(payload: String) {
+        val o = out ?: return
+        Thread { try { o.write(payload.toByteArray()); o.flush() } catch (_: Exception) {} }.start()
     }
 
     private fun addText(chunk: String) {
@@ -102,13 +116,8 @@ class MainActivity : Activity() {
     }
 
     private fun render(line: String): String {
-        val pass = keyField.text.toString()
-        if (pass.isEmpty() || !line.startsWith("[")) return line
-        val a = line.indexOf("] [")
-        if (a < 0) return line
-        val b = line.indexOf("] ", a + 3)
-        if (b < 0) return line
-        val body = line.substring(b + 2).trim()
-        return line.substring(0, b + 2) + (Crypto.dec(pass, body) ?: body)
+        if (line.startsWith("===")) return line
+        val d = Crypto.dec(myPass, line.trim())
+        return d ?: line
     }
 }
