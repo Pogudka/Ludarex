@@ -1,114 +1,126 @@
-package com.example.messenger
+#include <iostream>
+#include <string>
+#include <cstring>
+#include <ctime>
+#include <thread>
+#include <vector>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <openssl/evp.h>
+#include <openssl/sha.h>
+#include <openssl/rand.h>
 
-import android.app.Activity
-import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.widget.*
-import java.net.Socket
-import javax.crypto.Cipher
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
-import java.security.MessageDigest
-import java.security.SecureRandom
+const int PORT = 9999;
+int sock;
+std::string pass, myName;
 
-object Crypto {
-    fun key(pass: String): SecretKeySpec {
-        val md = MessageDigest.getInstance("SHA-256")
-        return SecretKeySpec(md.digest(pass.toByteArray()), "AES")
-    }
-    fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
-    fun unhex(s: String): ByteArray = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-    fun enc(pass: String, text: String): String {
-        val nonce = ByteArray(12); SecureRandom().nextBytes(nonce)
-        val c = Cipher.getInstance("AES/GCM/NoPadding")
-        c.init(Cipher.ENCRYPT_MODE, key(pass), GCMParameterSpec(128, nonce))
-        return hex(nonce.plus(c.doFinal(text.toByteArray())))
-    }
-    fun dec(pass: String, s: String): String? = try {
-        val d = unhex(s)
-        val c = Cipher.getInstance("AES/GCM/NoPadding")
-        c.init(Cipher.DECRYPT_MODE, key(pass), GCMParameterSpec(128, d.copyOfRange(0, 12)))
-        String(c.doFinal(d.copyOfRange(12, d.size)))
-    } catch (e: Exception) { null }
+std::string currentTime() {
+    std::time_t now = std::time(0);
+    std::tm* t = std::localtime(&now);
+    char buf[6];
+    std::strftime(buf, sizeof(buf), "%H:%M", t);
+    return std::string(buf);
 }
-
-class MainActivity : Activity() {
-    private val handler = Handler(Looper.getMainLooper())
-    private lateinit var log: TextView
-    private lateinit var ipField: EditText
-    private lateinit var nameField: EditText
-    private lateinit var keyField: EditText
-    private lateinit var msgField: EditText
-    @Volatile private var out: java.io.OutputStream? = null
-    private val buf = StringBuilder()
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(16, 16, 16, 16) }
-        ipField = EditText(this).apply { setText("127.0.0.1") }
-        nameField = EditText(this).apply { hint = "Имя" }
-        keyField = EditText(this).apply { hint = "Секретный ключ" }
-        val connectBtn = Button(this).apply { text = "Подключиться" }
-        log = TextView(this)
-        val scroll = ScrollView(this).apply { addView(log); layoutParams = LinearLayout.LayoutParams(-1, 0, 1f) }
-        msgField = EditText(this).apply { hint = "Сообщение..." }
-        val sendBtn = Button(this).apply { text = "Отправить" }
-        listOf(ipField, nameField, keyField, connectBtn, scroll, msgField, sendBtn).forEach { root.addView(it) }
-        setContentView(root)
-
-        connectBtn.setOnClickListener {
-            val ip = ipField.text.toString()
-            val name = nameField.text.toString().ifEmpty { "Аноним" }
-            Thread {
-                try {
-                    val s = Socket(ip, 9999)
-                    out = s.getOutputStream()
-                    out!!.write(name.toByteArray()); out!!.flush()
-                    handler.post { log.append("=== подключено ===\n") }
-                    val b = ByteArray(8192)
-                    while (true) {
-                        val n = s.getInputStream().read(b)
-                        if (n <= 0) break
-                        handler.post { addText(String(b, 0, n)) }
-                    }
-                    handler.post { log.append("=== оффлайн ===\n") }
-                } catch (e: Exception) {
-                    handler.post { log.append("=== ошибка: " + e.message + " ===\n") }
-                }
-            }.start()
-        }
-        sendBtn.setOnClickListener {
-            val t = msgField.text.toString()
-            val o = out
-            if (t.isNotEmpty() && o != null) {
-                val pass = keyField.text.toString()
-                val payload = if (t.startsWith("/") || pass.isEmpty()) t else Crypto.enc(pass, t)
-                Thread { try { o.write(payload.toByteArray()); o.flush() } catch (_: Exception) {} }.start()
-                msgField.setText("")
-            }
+std::string hex(const unsigned char* d, int n) {
+    std::string s; char t[3];
+    for (int i = 0; i < n; i++) { snprintf(t, 3, "%02x", d[i]); s += t; }
+    return s;
+}
+std::vector<unsigned char> unhex(const std::string& s) {
+    std::vector<unsigned char> v;
+    for (size_t i = 0; i + 1 < s.size(); i += 2)
+        v.push_back((unsigned char)strtol(s.substr(i, 2).c_str(), nullptr, 16));
+    return v;
+}
+std::string enc(const std::string& text) {
+    unsigned char key[32]; SHA256((const unsigned char*)pass.c_str(), pass.size(), key);
+    unsigned char nonce[12]; RAND_bytes(nonce, 12);
+    std::vector<unsigned char> out(text.size() + 64);
+    int len = 0, total = 0;
+    EVP_CIPHER_CTX* c = EVP_CIPHER_CTX_new();
+    EVP_EncryptInit_ex(c, EVP_aes_256_gcm(), nullptr, nullptr, nullptr);
+    EVP_EncryptInit_ex(c, nullptr, nullptr, key, nonce);
+    EVP_EncryptUpdate(c, out.data(), &len, (const unsigned char*)text.c_str(), text.size());
+    total = len;
+    EVP_EncryptFinal_ex(c, out.data() + len, &len); total += len;
+    unsigned char tag[16]; EVP_CIPHER_CTX_ctrl(c, EVP_CTRL_GCM_GET_TAG, 16, tag);
+    EVP_CIPHER_CTX_free(c);
+    std::vector<unsigned char> p;
+    p.insert(p.end(), nonce, nonce + 12);
+    p.insert(p.end(), out.begin(), out.begin() + total);
+    p.insert(p.end(), tag, tag + 16);
+    return hex(p.data(), p.size());
+}
+std::string dec(const std::string& s) {
+    std::vector<unsigned char> d = unhex(s);
+    if (d.size() < 28) return "";
+    unsigned char key[32]; SHA256((const unsigned char*)pass.c_str(), pass.size(), key);
+    int ctlen = d.size() - 12 - 16;
+    std::vector<unsigned char> out(ctlen + 32);
+    int len = 0, total = 0;
+    EVP_CIPHER_CTX* c = EVP_CIPHER_CTX_new();
+    EVP_DecryptInit_ex(c, EVP_aes_256_gcm(), nullptr, nullptr, nullptr);
+    EVP_DecryptInit_ex(c, nullptr, nullptr, key, d.data());
+    EVP_CIPHER_CTX_ctrl(c, EVP_CTRL_GCM_SET_TAG, 16, d.data() + 12 + ctlen);
+    if (EVP_DecryptUpdate(c, out.data(), &len, d.data() + 12, ctlen) != 1) { EVP_CIPHER_CTX_free(c); return ""; }
+    total = len;
+    if (EVP_DecryptFinal_ex(c, out.data() + len, &len) != 1) { EVP_CIPHER_CTX_free(c); return ""; }
+    total += len;
+    EVP_CIPHER_CTX_free(c);
+    return std::string((char*)out.data(), total);
+}
+std::string render(const std::string& line) {
+    if (line.rfind("===", 0) == 0) return line;
+    std::string d = dec(line);
+    return d.empty() ? line : d;
+}
+void sendLine(const std::string& payload) {
+    send(sock, payload.c_str(), payload.size(), 0);
+}
+void receiver() {
+    char buf[8192]; std::string acc;
+    while (true) {
+        memset(buf, 0, sizeof(buf));
+        int n = recv(sock, buf, sizeof(buf) - 1, 0);
+        if (n <= 0) { std::cout << "\n[связь потеряна]\n"; break; }
+        acc.append(buf, n);
+        size_t p;
+        while ((p = acc.find('\n')) != std::string::npos) {
+            std::string line = acc.substr(0, p);
+            acc.erase(0, p + 1);
+            std::cout << render(line) << "\n";
         }
     }
+}
+int main(int argc, char* argv[]) {
+    std::string serverIP = "127.0.0.1";
+    if (argc > 1) serverIP = argv[1];
+    std::cout << "Твоё имя: "; std::getline(std::cin, myName);
+    if (myName.empty()) myName = "Аноним";
+    std::cout << "Секретный ключ (пусто = без шифрования): "; std::getline(std::cin, pass);
 
-    private fun addText(chunk: String) {
-        buf.append(chunk)
-        var i = buf.indexOf("\n")
-        while (i >= 0) {
-            val line = buf.substring(0, i)
-            buf.delete(0, i + 1)
-            log.append(render(line) + "\n")
-            i = buf.indexOf("\n")
-        }
-    }
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET; addr.sin_port = htons(PORT);
+    inet_pton(AF_INET, serverIP.c_str(), &addr.sin_addr);
+    std::cout << "Звоню на " << serverIP << "...\n";
+    if (connect(sock, (sockaddr*)&addr, sizeof(addr)) < 0) { std::cout << "Сервер не найден\n"; return 1; }
+    std::thread(receiver).detach();
 
-    private fun render(line: String): String {
-        val pass = keyField.text.toString()
-        if (pass.isEmpty() || !line.startsWith("[")) return line
-        val a = line.indexOf("] [")
-        if (a < 0) return line
-        val b = line.indexOf("] ", a + 3)
-        if (b < 0) return line
-        val body = line.substring(b + 2).trim()
-        return line.substring(0, b + 2) + (Crypto.dec(pass, body) ?: body)
+    std::string join = "=== " + myName + " зашёл в чат ===";
+    sendLine(pass.empty() ? join : enc(join));
+
+    std::cout << "Ты в чате! /exit - выйти\n";
+    std::string input;
+    while (true) {
+        std::getline(std::cin, input);
+        if (input == "/exit") break;
+        if (input.empty()) continue;
+        if (input[0] == '/' || pass.empty()) sendLine(input);
+        else sendLine(enc("[" + currentTime() + "] [" + myName + "] " + input));
     }
+    close(sock);
+    return 0;
 }
