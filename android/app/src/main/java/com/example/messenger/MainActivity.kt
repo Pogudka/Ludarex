@@ -54,12 +54,12 @@ class MainActivity : Activity() {
     @Volatile private var out: java.io.OutputStream? = null
     @Volatile private var socket: Socket? = null
     private val buf = StringBuilder()
-    private var myName = "Аноним"
-    private var myPass = ""
     private val PICK_IMAGE = 1001
 
     private fun now() = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+    private fun pass() = keyField.text.toString()
+    private fun name() = nameField.text.toString().ifEmpty { "Аноним" }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -89,21 +89,23 @@ class MainActivity : Activity() {
         }
         connectBtn.setOnClickListener {
             val ip = ipField.text.toString()
-            myName = nameField.text.toString().ifEmpty { "Аноним" }
-            myPass = keyField.text.toString()
+            val p = pass()
+            val n = name()
+            handler.post { chatBox.removeAllViews() }
+            buf.setLength(0)
             Thread {
                 try {
                     val s = Socket(ip, 9999)
                     socket = s
                     out = s.getOutputStream()
                     addTextLine("=== подключено ===")
-                    val join = "=== $myName зашёл в чат ==="
-                    sendLine(if (myPass.isEmpty()) join else Crypto.enc(myPass, join))
+                    val join = "=== $n зашёл в чат ==="
+                    sendLine(if (p.isEmpty()) join else Crypto.enc(p, join))
                     val b = ByteArray(8192)
                     while (true) {
-                        val n = s.getInputStream().read(b)
-                        if (n <= 0) break
-                        handler.post { addText(String(b, 0, n)) }
+                        val nn = s.getInputStream().read(b)
+                        if (nn <= 0) break
+                        handler.post { addText(String(b, 0, nn)) }
                     }
                     out = null; socket = null
                     addTextLine("=== оффлайн ===")
@@ -127,8 +129,9 @@ class MainActivity : Activity() {
                 addTextLine("=== нет подключения: нажми Подключиться ===")
                 return@setOnClickListener
             }
-            if (t.startsWith("/") || myPass.isEmpty()) sendLine(t)
-            else sendLine(Crypto.enc(myPass, "[${now()}] [$myName] $t"))
+            val p = pass()
+            if (t.startsWith("/") || p.isEmpty()) sendLine(t)
+            else sendLine(Crypto.enc(p, "[${now()}] [${name()}] $t"))
             msgField.setText("")
         }
     }
@@ -146,8 +149,9 @@ class MainActivity : Activity() {
                 val b64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
                 val payload = "[IMG:$b64]"
                 if (out == null) { addTextLine("=== нет подключения ==="); return }
-                if (myPass.isEmpty()) sendLine(payload)
-                else sendLine(Crypto.enc(myPass, "[${now()}] [$myName] $payload"))
+                val p = pass()
+                if (p.isEmpty()) sendLine(payload)
+                else sendLine(Crypto.enc(p, "[${now()}] [${name()}] $payload"))
                 handler.post { addImageView(b64) }
             } catch (e: Exception) {
                 addTextLine("=== ошибка загрузки фото ===")
@@ -194,7 +198,9 @@ class MainActivity : Activity() {
 
     private fun render(line: String) {
         if (line.startsWith("===")) { addTextLine(line); return }
-        val d = Crypto.dec(myPass, line.trim()) ?: run { addTextLine(line); return }
+        val p = pass()
+        val d = Crypto.dec(p, line.trim())
+        if (d == null) { addTextLine("🔒 не читается (другой ключ?)"); return }
         val m = Regex("\\[IMG:([^\\]]+)\\]").find(d)
         if (m != null) addImageView(m.groupValues[1])
         else addTextLine(d)
