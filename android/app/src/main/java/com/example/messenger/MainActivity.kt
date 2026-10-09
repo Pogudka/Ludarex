@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -60,6 +59,7 @@ class MainActivity : Activity() {
     private val PICK_IMAGE = 1001
 
     private fun now() = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -105,8 +105,10 @@ class MainActivity : Activity() {
                         if (n <= 0) break
                         handler.post { addText(String(b, 0, n)) }
                     }
+                    out = null; socket = null
                     addTextLine("=== оффлайн ===")
                 } catch (e: Exception) {
+                    out = null; socket = null
                     addTextLine("=== ошибка: " + e.message + " ===")
                 }
             }.start()
@@ -121,6 +123,10 @@ class MainActivity : Activity() {
                 msgField.setText("")
                 return@setOnClickListener
             }
+            if (out == null) {
+                addTextLine("=== нет подключения: нажми Подключиться ===")
+                return@setOnClickListener
+            }
             if (t.startsWith("/") || myPass.isEmpty()) sendLine(t)
             else sendLine(Crypto.enc(myPass, "[${now()}] [$myName] $t"))
             msgField.setText("")
@@ -132,15 +138,17 @@ class MainActivity : Activity() {
         if (requestCode == PICK_IMAGE && resultCode == RESULT_OK && data?.data != null) {
             try {
                 val bmp = MediaStore.Images.Media.getBitmap(contentResolver, data.data!!)
-                val w = 400
-                val scaled = Bitmap.createScaledBitmap(bmp, w, w * bmp.height / bmp.width, true)
+                val maxW = 320
+                val scaled = if (bmp.width > maxW)
+                    Bitmap.createScaledBitmap(bmp, maxW, maxW * bmp.height / bmp.width, true) else bmp
                 val baos = ByteArrayOutputStream()
-                scaled.compress(Bitmap.CompressFormat.JPEG, 70, baos)
+                scaled.compress(Bitmap.CompressFormat.JPEG, 60, baos)
                 val b64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
                 val payload = "[IMG:$b64]"
+                if (out == null) { addTextLine("=== нет подключения ==="); return }
                 if (myPass.isEmpty()) sendLine(payload)
                 else sendLine(Crypto.enc(myPass, "[${now()}] [$myName] $payload"))
-                handler.post { addImageView(b64) }   // показать своё фото сразу
+                handler.post { addImageView(b64) }
             } catch (e: Exception) {
                 addTextLine("=== ошибка загрузки фото ===")
             }
@@ -168,7 +176,7 @@ class MainActivity : Activity() {
         chatBox.addView(ImageView(this).apply {
             setImageBitmap(bmp)
             adjustViewBounds = true
-            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 8 }
+            layoutParams = LinearLayout.LayoutParams(dp(240), -2).apply { bottomMargin = 8 }
         })
         scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
     }
