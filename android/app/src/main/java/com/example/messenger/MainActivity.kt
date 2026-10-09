@@ -10,6 +10,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import android.util.Base64
+import android.view.View
 import android.widget.*
 import java.io.ByteArrayOutputStream
 import java.net.Socket
@@ -45,7 +46,8 @@ object Crypto {
 
 class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
-    private lateinit var log: TextView
+    private lateinit var chatBox: LinearLayout
+    private lateinit var scroll: ScrollView
     private lateinit var ipField: EditText
     private lateinit var nameField: EditText
     private lateinit var keyField: EditText
@@ -67,8 +69,11 @@ class MainActivity : Activity() {
         keyField = EditText(this).apply { hint = "Секретный ключ" }
         val genBtn = Button(this).apply { text = "🎲 Сгенерировать ключ" }
         val connectBtn = Button(this).apply { text = "Подключиться" }
-        log = TextView(this)
-        val scroll = ScrollView(this).apply { addView(log); layoutParams = LinearLayout.LayoutParams(-1, 0, 1f) }
+        chatBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        scroll = ScrollView(this).apply {
+            addView(chatBox)
+            layoutParams = LinearLayout.LayoutParams(-1, 0, 1f)
+        }
         msgField = EditText(this).apply { hint = "Сообщение..." }
         val imgBtn = Button(this).apply { text = "📷 Фото" }
         val sendBtn = Button(this).apply { text = "Отправить" }
@@ -79,12 +84,9 @@ class MainActivity : Activity() {
             val b = ByteArray(16); SecureRandom().nextBytes(b)
             keyField.setText(Crypto.hex(b))
         }
-
         imgBtn.setOnClickListener {
-            val intent = Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
-            startActivityForResult(intent, PICK_IMAGE)
+            startActivityForResult(Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI), PICK_IMAGE)
         }
-
         connectBtn.setOnClickListener {
             val ip = ipField.text.toString()
             myName = nameField.text.toString().ifEmpty { "Аноним" }
@@ -94,7 +96,7 @@ class MainActivity : Activity() {
                     val s = Socket(ip, 9999)
                     socket = s
                     out = s.getOutputStream()
-                    handler.post { log.append("=== подключено ===\n") }
+                    addTextLine("=== подключено ===")
                     val join = "=== $myName зашёл в чат ==="
                     sendLine(if (myPass.isEmpty()) join else Crypto.enc(myPass, join))
                     val b = ByteArray(8192)
@@ -103,9 +105,9 @@ class MainActivity : Activity() {
                         if (n <= 0) break
                         handler.post { addText(String(b, 0, n)) }
                     }
-                    handler.post { log.append("=== оффлайн ===\n") }
+                    addTextLine("=== оффлайн ===")
                 } catch (e: Exception) {
-                    handler.post { log.append("=== ошибка: " + e.message + " ===\n") }
+                    addTextLine("=== ошибка: " + e.message + " ===")
                 }
             }.start()
         }
@@ -115,7 +117,7 @@ class MainActivity : Activity() {
             if (t == "/exit") {
                 try { socket?.close() } catch (_: Exception) {}
                 out = null; socket = null
-                log.append("=== ты вышел из чата ===\n")
+                addTextLine("=== ты вышел из чата ===")
                 msgField.setText("")
                 return@setOnClickListener
             }
@@ -128,19 +130,19 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == PICK_IMAGE && resultCode == RESULT_OK && data?.data != null) {
-            val uri = data.data!!
             try {
-                val bmp = MediaStore.Images.Media.getBitmap(contentResolver, uri)
-                val scaled = Bitmap.createScaledBitmap(bmp, 400, 400 * bmp.height / bmp.width, true)
+                val bmp = MediaStore.Images.Media.getBitmap(contentResolver, data.data!!)
+                val w = 400
+                val scaled = Bitmap.createScaledBitmap(bmp, w, w * bmp.height / bmp.width, true)
                 val baos = ByteArrayOutputStream()
                 scaled.compress(Bitmap.CompressFormat.JPEG, 70, baos)
                 val b64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
                 val payload = "[IMG:$b64]"
                 if (myPass.isEmpty()) sendLine(payload)
                 else sendLine(Crypto.enc(myPass, "[${now()}] [$myName] $payload"))
-                handler.post { log.append("[отправил фото]\n") }
+                handler.post { addImageView(b64) }   // показать своё фото сразу
             } catch (e: Exception) {
-                handler.post { log.append("=== ошибка загрузки фото ===\n") }
+                addTextLine("=== ошибка загрузки фото ===")
             }
         }
     }
@@ -150,32 +152,43 @@ class MainActivity : Activity() {
         Thread { try { o.write(payload.toByteArray()); o.flush() } catch (_: Exception) {} }.start()
     }
 
+    private fun addTextLine(text: String) {
+        handler.post {
+            chatBox.addView(TextView(this).apply {
+                this.text = text
+                setPadding(0, 4, 0, 4)
+            })
+            scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+        }
+    }
+
+    private fun addImageView(b64: String) {
+        val bytes = Base64.decode(b64, Base64.NO_WRAP)
+        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return
+        chatBox.addView(ImageView(this).apply {
+            setImageBitmap(bmp)
+            adjustViewBounds = true
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 8 }
+        })
+        scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+    }
+
     private fun addText(chunk: String) {
         buf.append(chunk)
         var i = buf.indexOf("\n")
         while (i >= 0) {
             val line = buf.substring(0, i)
             buf.delete(0, i + 1)
-            log.append(render(line) + "\n")
+            render(line)
             i = buf.indexOf("\n")
         }
     }
 
-    private fun render(line: String): String {
-        if (line.startsWith("===")) return line
-        val d = Crypto.dec(myPass, line.trim()) ?: return line
-        val imgMatch = Regex("\\[IMG:([^\\]]+)\\]").find(d)
-        if (imgMatch != null) {
-            val b64 = imgMatch.groupValues[1]
-            val html = "<html><body><img src='data:image/jpeg;base64,$b64' style='max-width:100%'/></body></html>"
-            val tmp = java.io.File.createTempFile("img_", ".html", cacheDir)
-            tmp.writeText(html)
-            handler.post {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.fromFile(tmp))
-                startActivity(intent)
-            }
-            return "[📷 фото - нажми для просмотра]"
-        }
-        return d
+    private fun render(line: String) {
+        if (line.startsWith("===")) { addTextLine(line); return }
+        val d = Crypto.dec(myPass, line.trim()) ?: run { addTextLine(line); return }
+        val m = Regex("\\[IMG:([^\\]]+)\\]").find(d)
+        if (m != null) addImageView(m.groupValues[1])
+        else addTextLine(d)
     }
 }
