@@ -71,14 +71,16 @@ std::string dec(const std::string& s) {
     EVP_CIPHER_CTX_free(c);
     return std::string((char*)out.data(), total);
 }
+void sendLine(const std::string& payload) {
+    std::string p = payload + "\n";
+    send(sock, p.c_str(), p.size(), 0);
+}
 std::string render(const std::string& line) {
     if (line.rfind("===", 0) == 0) return line;
     std::string d = dec(line);
     if (d.empty()) return line;
     size_t img = d.find("[IMG:");
-    if (img != std::string::npos) {
-        return d.substr(0, img) + "[📷 фото]";
-    }
+    if (img != std::string::npos) return d.substr(0, img) + "[📷 фото]";
     return d;
 }
 void receiver() {
@@ -112,7 +114,7 @@ int main(int argc, char* argv[]) {
     std::thread(receiver).detach();
 
     std::string join = "=== " + myName + " зашёл в чат ===";
-    send(sock, join.c_str(), join.size(), 0);
+    sendLine(pass.empty() ? join : enc(join));
 
     std::cout << "Ты в чате! /exit - выйти\n";
     std::string input;
@@ -120,8 +122,7 @@ int main(int argc, char* argv[]) {
         std::getline(std::cin, input);
         if (input == "/exit") break;
         if (input.empty()) continue;
-        std::string payload = (!pass.empty() && input[0] != '/') ? enc("[" + currentTime() + "] [" + myName + "] " + input) : input;
-        send(sock, payload.c_str(), payload.size(), 0);
+        sendLine((!pass.empty() && input[0] != '/') ? enc("[" + currentTime() + "] [" + myName + "] " + input) : input);
     }
     close(sock);
     return 0;
