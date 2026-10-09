@@ -157,7 +157,7 @@ class MainActivity : Activity() {
 
     private fun sendLine(payload: String) {
         val o = out ?: return
-        Thread { try { o.write(payload.toByteArray()); o.flush() } catch (_: Exception) {} }.start()
+        Thread { try { o.write((payload + "\n").toByteArray()); o.flush() } catch (_: Exception) {} }.start()
     }
 
     private fun addTextLine(text: String) {
