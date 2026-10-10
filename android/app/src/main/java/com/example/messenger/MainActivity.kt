@@ -155,7 +155,7 @@ class MainActivity : Activity() {
                 msgField.setText("")
                 return@setOnClickListener
             }
-            if (t.rfind("/reset ", 0) == 0) {
+            if (t.startsWith("/reset ")) {
                 val peer = t.substring(7)
                 sessionKeys.remove(peer); pendingA.remove(peer); pendingP.remove(peer)
                 if (currentPeer == peer) currentPeer = ""
