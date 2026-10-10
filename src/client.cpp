@@ -16,6 +16,11 @@ const int PORT = 9999;
 int sock;
 std::string pass, myName;
 
+long curHour() { return (long)(std::time(0) / 3600); }
+void keyFor(const std::string& pass, long hour, unsigned char* key) {
+    std::string s = pass + ":" + std::to_string(hour);
+    SHA256((const unsigned char*)s.c_str(), s.size(), key);
+}
 std::string currentTime() {
     std::time_t now = std::time(0);
     std::tm* t = std::localtime(&now);
@@ -35,8 +40,11 @@ std::vector<unsigned char> unhex(const std::string& s) {
     return v;
 }
 std::string enc(const std::string& text) {
-    unsigned char key[32]; SHA256((const unsigned char*)pass.c_str(), pass.size(), key);
+    long hour = curHour();
+    unsigned char key[32]; keyFor(pass, hour, key);
     unsigned char nonce[12]; RAND_bytes(nonce, 12);
+    nonce[0] = (hour >> 24) & 255; nonce[1] = (hour >> 16) & 255;
+    nonce[2] = (hour >> 8) & 255;  nonce[3] = hour & 255;
     std::vector<unsigned char> out(text.size() + 64);
     int len = 0, total = 0;
     EVP_CIPHER_CTX* c = EVP_CIPHER_CTX_new();
@@ -56,7 +64,9 @@ std::string enc(const std::string& text) {
 std::string dec(const std::string& s) {
     std::vector<unsigned char> d = unhex(s);
     if (d.size() < 28) return "";
-    unsigned char key[32]; SHA256((const unsigned char*)pass.c_str(), pass.size(), key);
+    long hour = ((long)d[0] << 24) | ((long)d[1] << 16) | ((long)d[2] << 8) | (long)d[3];
+    hour &= 0xFFFFFFFFL;
+    unsigned char key[32]; keyFor(pass, hour, key);
     int ctlen = d.size() - 12 - 16;
     std::vector<unsigned char> out(ctlen + 32);
     int len = 0, total = 0;
@@ -78,7 +88,7 @@ void sendLine(const std::string& payload) {
 std::string render(const std::string& line) {
     if (line.rfind("===", 0) == 0) return line;
     std::string d = dec(line);
-    if (d.empty()) return line;
+    if (d.empty()) return "🔒 не читается (len=" + std::to_string(line.size()) + ") " + line.substr(0, 24);
     size_t img = d.find("[IMG:");
     if (img != std::string::npos) return d.substr(0, img) + "[📷 фото]";
     return d;
@@ -103,7 +113,7 @@ int main(int argc, char* argv[]) {
     if (argc > 1) serverIP = argv[1];
     std::cout << "Твоё имя: "; std::getline(std::cin, myName);
     if (myName.empty()) myName = "Аноним";
-    std::cout << "Секретный ключ (пусто = без шифрования): "; std::getline(std::cin, pass);
+    std::cout << "Мастер-ключ (пусто = без шифрования): "; std::getline(std::cin, pass);
 
     sock = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in addr{};
