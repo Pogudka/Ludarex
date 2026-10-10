@@ -1,6 +1,8 @@
 package com.example.messenger
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -86,7 +88,8 @@ class MainActivity : Activity() {
         ipField = EditText(this).apply { setText("127.0.0.1") }
         nameField = EditText(this).apply { hint = "Имя" }
         keyField = EditText(this).apply { hint = "Мастер-ключ" }
-        val genBtn = Button(this).apply { text = "🎲 Сгенерировать ключ" }
+        val genBtn = Button(this).apply { text = "🎲 Сгенерировать" }
+        val copyBtn = Button(this).apply { text = "📋 Копировать" }
         val connectBtn = Button(this).apply { text = "Подключиться" }
         chatBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         scroll = ScrollView(this).apply {
@@ -96,11 +99,17 @@ class MainActivity : Activity() {
         msgField = EditText(this).apply { hint = "Сообщение..." }
         val imgBtn = Button(this).apply { text = "📷 Фото" }
         val sendBtn = Button(this).apply { text = "Отправить" }
-        listOf(ipField, nameField, keyField, genBtn, connectBtn, scroll, msgField, imgBtn, sendBtn).forEach { root.addView(it) }
+        listOf(ipField, nameField, keyField, genBtn, copyBtn, connectBtn, scroll, msgField, imgBtn, sendBtn).forEach { root.addView(it) }
         setContentView(root)
 
         genBtn.setOnClickListener {
             keyField.setText(Crypto.babylonKey(12))
+        }
+        copyBtn.setOnClickListener {
+            val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+            val clip = ClipData.newPlainText("key", keyField.text.toString())
+            clipboard.setPrimaryClip(clip)
+            Toast.makeText(this, "Ключ скопирован", Toast.LENGTH_SHORT).show()
         }
         imgBtn.setOnClickListener {
             startActivityForResult(Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI), PICK_IMAGE)
@@ -170,7 +179,6 @@ class MainActivity : Activity() {
                 val p = pass()
                 if (p.isEmpty()) sendLine(payload)
                 else sendLine(Crypto.enc(p, "[${now()}] [${name()}] $payload"))
-                handler.post { addImageView(b64) }
             } catch (e: Exception) {
                 addTextLine("=== ошибка загрузки фото ===")
             }
