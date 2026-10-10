@@ -64,8 +64,8 @@ std::string enc(const std::string& text) {
 std::string dec(const std::string& s) {
     std::vector<unsigned char> d = unhex(s);
     if (d.size() < 28) return "";
-    long hour = ((long)d[0] << 24) | ((long)d[1] << 16) | ((long)d[2] << 8) | (long)d[3];
-    hour &= 0xFFFFFFFFL;
+    long hour = ((long)(unsigned char)d[0] << 24) | ((long)(unsigned char)d[1] << 16) |
+                ((long)(unsigned char)d[2] << 8) | (long)(unsigned char)d[3];
     unsigned char key[32]; keyFor(pass, hour, key);
     int ctlen = d.size() - 12 - 16;
     std::vector<unsigned char> out(ctlen + 32);
@@ -113,7 +113,6 @@ int main(int argc, char* argv[]) {
     if (argc > 1) serverIP = argv[1];
     std::cout << "Твоё имя: "; std::getline(std::cin, myName);
     if (myName.empty()) myName = "Аноним";
-    std::cout << "Мастер-ключ (пусто = без шифрования): "; std::getline(std::cin, pass);
 
     sock = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in addr{};
@@ -121,10 +120,14 @@ int main(int argc, char* argv[]) {
     inet_pton(AF_INET, serverIP.c_str(), &addr.sin_addr);
     std::cout << "Звоню на " << serverIP << "...\n";
     if (connect(sock, (sockaddr*)&addr, sizeof(addr)) < 0) { std::cout << "Сервер не найден\n"; return 1; }
-    std::thread(receiver).detach();
 
-    std::string join = "=== " + myName + " зашёл в чат ===";
-    sendLine(pass.empty() ? join : enc(join));
+    std::string keyline; char ch;
+    while (recv(sock, &ch, 1, 0) == 1) { if (ch == '\n') break; keyline += ch; }
+    pass = keyline;
+    std::cout << "Мастер-ключ от сервера: " << pass << "\n";
+
+    std::thread(receiver).detach();
+    sendLine(enc("=== " + myName + " зашёл в чат ==="));
 
     std::cout << "Ты в чате! /exit - выйти\n";
     std::string input;
@@ -132,7 +135,7 @@ int main(int argc, char* argv[]) {
         std::getline(std::cin, input);
         if (input == "/exit") break;
         if (input.empty()) continue;
-        sendLine((!pass.empty() && input[0] != '/') ? enc("[" + currentTime() + "] [" + myName + "] " + input) : input);
+        sendLine((input[0] != '/') ? enc("[" + currentTime() + "] [" + myName + "] " + input) : input);
     }
     close(sock);
     return 0;
