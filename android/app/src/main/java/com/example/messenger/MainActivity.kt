@@ -22,6 +22,9 @@ import javax.crypto.spec.SecretKeySpec
 import java.security.MessageDigest
 import java.security.SecureRandom
 
+// ОДИН МАСТЕР-КЛЮЧ НА ВСЕ УСТРОЙСТВА. Меняй здесь И в client.cpp ОДИНАКОВО.
+const val MASTER_KEY = "ludarex-babylon-2026"
+
 object Crypto {
     fun curHour() = System.currentTimeMillis() / 1000 / 3600
     fun keyFor(pass: String, hour: Long): SecretKeySpec {
@@ -60,11 +63,9 @@ class MainActivity : Activity() {
     private lateinit var scroll: ScrollView
     private lateinit var ipField: EditText
     private lateinit var nameField: EditText
-    private lateinit var keyField: EditText
     private lateinit var msgField: EditText
     @Volatile private var out: java.io.OutputStream? = null
     @Volatile private var socket: Socket? = null
-    @Volatile private var myPass = ""
     private val buf = StringBuilder()
     private val PICK_IMAGE = 1001
 
@@ -77,7 +78,6 @@ class MainActivity : Activity() {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(16, 16, 16, 16) }
         ipField = EditText(this).apply { setText("127.0.0.1") }
         nameField = EditText(this).apply { hint = "Имя" }
-        keyField = EditText(this).apply { hint = "Ключ (придёт с сервера)"; isEnabled = false }
         val connectBtn = Button(this).apply { text = "Подключиться" }
         chatBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         scroll = ScrollView(this).apply {
@@ -87,7 +87,7 @@ class MainActivity : Activity() {
         msgField = EditText(this).apply { hint = "Сообщение..." }
         val imgBtn = Button(this).apply { text = "📷 Фото" }
         val sendBtn = Button(this).apply { text = "Отправить" }
-        listOf(ipField, nameField, keyField, connectBtn, scroll, msgField, imgBtn, sendBtn).forEach { root.addView(it) }
+        listOf(ipField, nameField, connectBtn, scroll, msgField, imgBtn, sendBtn).forEach { root.addView(it) }
         setContentView(root)
 
         imgBtn.setOnClickListener {
@@ -102,21 +102,12 @@ class MainActivity : Activity() {
                 try {
                     val s = Socket(ip, 9999)
                     socket = s
-                    val ins = s.getInputStream()
                     out = s.getOutputStream()
-                    val sb = StringBuilder()
-                    while (true) {
-                        val b = ins.read()
-                        if (b == -1 || b == '\n'.code) break
-                        sb.append(b.toChar())
-                    }
-                    myPass = sb.toString()
-                    handler.post { keyField.setText(myPass) }
-                    addTextLine("=== подключено, ключ получен ===")
-                    sendLine(Crypto.enc(myPass, "=== $n зашёл в чат ==="))
+                    addTextLine("=== подключено ===")
+                    sendLine(Crypto.enc(MASTER_KEY, "=== $n зашёл в чат ==="))
                     val b = ByteArray(8192)
                     while (true) {
-                        val nn = ins.read(b)
+                        val nn = s.getInputStream().read(b)
                         if (nn <= 0) break
                         handler.post { addText(String(b, 0, nn)) }
                     }
@@ -142,8 +133,8 @@ class MainActivity : Activity() {
                 addTextLine("=== нет подключения: нажми Подключиться ===")
                 return@setOnClickListener
             }
-            if (t.startsWith("/") || myPass.isEmpty()) sendLine(t)
-            else sendLine(Crypto.enc(myPass, "[${now()}] [${name()}] $t"))
+            if (t.startsWith("/")) sendLine(t)
+            else sendLine(Crypto.enc(MASTER_KEY, "[${now()}] [${name()}] $t"))
             msgField.setText("")
         }
     }
@@ -161,8 +152,7 @@ class MainActivity : Activity() {
                 val b64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
                 val payload = "[IMG:$b64]"
                 if (out == null) { addTextLine("=== нет подключения ==="); return }
-                if (myPass.isEmpty()) sendLine(payload)
-                else sendLine(Crypto.enc(myPass, "[${now()}] [${name()}] $payload"))
+                sendLine(Crypto.enc(MASTER_KEY, "[${now()}] [${name()}] $payload"))
             } catch (e: Exception) {
                 addTextLine("=== ошибка загрузки фото ===")
             }
@@ -208,7 +198,7 @@ class MainActivity : Activity() {
 
     private fun render(line: String) {
         if (line.startsWith("===")) { addTextLine(line); return }
-        val d = Crypto.dec(myPass, line.trim())
+        val d = Crypto.dec(MASTER_KEY, line.trim())
         if (d == null) {
             addTextLine("🔒 не читается (len=" + line.length + ") " + line.take(24))
             return
