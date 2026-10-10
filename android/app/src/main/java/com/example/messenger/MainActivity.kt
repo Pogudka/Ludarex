@@ -12,49 +12,47 @@ import android.util.Base64
 import android.view.View
 import android.widget.*
 import java.io.ByteArrayOutputStream
+import java.math.BigInteger
 import java.net.Socket
+import java.security.MessageDigest
+import java.security.SecureRandom
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
-import java.security.MessageDigest
-import java.security.SecureRandom
 
-// ОДИН МАСТЕР-КЛЮЧ НА ВСЕ УСТРОЙСТВА. Меняй здесь И в client.cpp ОДИНАКОВО.
 const val MASTER_KEY = "ludarex-babylon-2026"
 
 object Crypto {
-    fun curHour() = System.currentTimeMillis() / 1000 / 3600
-    fun keyFor(pass: String, hour: Long): SecretKeySpec {
-        val md = MessageDigest.getInstance("SHA-256")
-        return SecretKeySpec(md.digest("$pass:$hour".toByteArray()), "AES")
-    }
+    fun sha256(b: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(b)
+    fun groupKey(): ByteArray = sha256(MASTER_KEY.toByteArray())
     fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
     fun unhex(s: String): ByteArray = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-    fun enc(pass: String, text: String): String {
-        val hour = curHour()
-        val nonce = ByteArray(12)
-        SecureRandom().nextBytes(nonce)
-        nonce[0] = (hour shr 24).toByte()
-        nonce[1] = (hour shr 16).toByte()
-        nonce[2] = (hour shr 8).toByte()
-        nonce[3] = hour.toByte()
+    fun enc(key: ByteArray, text: String): String {
+        val nonce = ByteArray(12); SecureRandom().nextBytes(nonce)
         val c = Cipher.getInstance("AES/GCM/NoPadding")
-        c.init(Cipher.ENCRYPT_MODE, keyFor(pass, hour), GCMParameterSpec(128, nonce))
+        c.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, nonce))
         return hex(nonce.plus(c.doFinal(text.toByteArray())))
     }
-    fun dec(pass: String, s: String): String? = try {
+    fun dec(key: ByteArray, s: String): String? = try {
         val d = unhex(s)
         if (d.size < 28) null else {
-            val hour = ((d[0].toLong() and 255) shl 24) or ((d[1].toLong() and 255) shl 16) or
-                       ((d[2].toLong() and 255) shl 8) or (d[3].toLong() and 255)
             val c = Cipher.getInstance("AES/GCM/NoPadding")
-            c.init(Cipher.DECRYPT_MODE, keyFor(pass, hour), GCMParameterSpec(128, d.copyOfRange(0, 12)))
+            c.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, d.copyOfRange(0, 12)))
             String(c.doFinal(d.copyOfRange(12, d.size)))
         }
     } catch (e: Exception) { null }
+    fun fingerprint(key: ByteArray): String = hex(sha256(key).copyOfRange(0, 4))
+    fun safePrime(bits: Int): BigInteger {
+        val r = SecureRandom()
+        while (true) {
+            val q = BigInteger(bits - 1, r).setBit(bits - 2).setBit(0).nextProbablePrime()
+            val p = q.shiftLeft(1).add(BigInteger.ONE)
+            if (p.bitLength() == bits && p.isProbablePrime(64)) return p
+        }
+    }
 }
 
 class MainActivity : Activity() {
@@ -63,22 +61,29 @@ class MainActivity : Activity() {
     private lateinit var scroll: ScrollView
     private lateinit var ipField: EditText
     private lateinit var nameField: EditText
+    private lateinit var peerField: EditText
     private lateinit var msgField: EditText
     @Volatile private var out: java.io.OutputStream? = null
     @Volatile private var socket: Socket? = null
     private val buf = StringBuilder()
+    private val sessionKeys = mutableMapOf<String, ByteArray>()
+    private val pendingA = mutableMapOf<String, BigInteger>()
+    private val pendingP = mutableMapOf<String, BigInteger>()
+    private var currentPeer = ""
     private val PICK_IMAGE = 1001
 
     private fun now() = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-    private fun name() = nameField.text.toString().ifEmpty { "Аноним" }
+    private fun me() = nameField.text.toString().ifEmpty { "Аноним" }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(16, 16, 16, 16) }
         ipField = EditText(this).apply { setText("127.0.0.1") }
         nameField = EditText(this).apply { hint = "Имя" }
+        peerField = EditText(this).apply { hint = "Собеседник (для secret)" }
         val connectBtn = Button(this).apply { text = "Подключиться" }
+        val secretBtn = Button(this).apply { text = "🔐 Secret chat" }
         chatBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         scroll = ScrollView(this).apply {
             addView(chatBox)
@@ -87,15 +92,30 @@ class MainActivity : Activity() {
         msgField = EditText(this).apply { hint = "Сообщение..." }
         val imgBtn = Button(this).apply { text = "📷 Фото" }
         val sendBtn = Button(this).apply { text = "Отправить" }
-        listOf(ipField, nameField, connectBtn, scroll, msgField, imgBtn, sendBtn).forEach { root.addView(it) }
+        listOf(ipField, nameField, peerField, connectBtn, secretBtn, scroll, msgField, imgBtn, sendBtn).forEach { root.addView(it) }
         setContentView(root)
 
+        secretBtn.setOnClickListener {
+            val peer = peerField.text.toString()
+            if (peer.isEmpty()) { addTextLine("укажи собеседника"); return@setOnClickListener }
+            currentPeer = peer
+            Thread {
+                val p = Crypto.safePrime(1024)
+                val g = BigInteger.TWO
+                val a = BigInteger(256, SecureRandom())
+                val A = g.modPow(a, p)
+                pendingA[peer] = a
+                pendingP[peer] = p
+                sendLine("@$peer DHREQ ${me()} ${p.toString(16)} ${g.toString(16)} ${A.toString(16)}")
+                addTextLine("предложение ключа отправлено $peer...")
+            }.start()
+        }
         imgBtn.setOnClickListener {
             startActivityForResult(Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI), PICK_IMAGE)
         }
         connectBtn.setOnClickListener {
             val ip = ipField.text.toString()
-            val n = name()
+            val n = me()
             handler.post { chatBox.removeAllViews() }
             buf.setLength(0)
             Thread {
@@ -103,8 +123,8 @@ class MainActivity : Activity() {
                     val s = Socket(ip, 9999)
                     socket = s
                     out = s.getOutputStream()
+                    sendLine("REG $n")
                     addTextLine("=== подключено ===")
-                    sendLine(Crypto.enc(MASTER_KEY, "=== $n зашёл в чат ==="))
                     val b = ByteArray(8192)
                     while (true) {
                         val nn = s.getInputStream().read(b)
@@ -122,21 +142,22 @@ class MainActivity : Activity() {
         sendBtn.setOnClickListener {
             val t = msgField.text.toString()
             if (t.isEmpty()) return@setOnClickListener
-            if (t == "/exit") {
-                try { socket?.close() } catch (_: Exception) {}
-                out = null; socket = null
-                addTextLine("=== ты вышел из чата ===")
-                msgField.setText("")
-                return@setOnClickListener
-            }
-            if (out == null) {
-                addTextLine("=== нет подключения: нажми Подключиться ===")
-                return@setOnClickListener
-            }
-            if (t.startsWith("/")) sendLine(t)
-            else sendLine(Crypto.enc(MASTER_KEY, "[${now()}] [${name()}] $t"))
+            if (out == null) { addTextLine("=== нет подключения ==="); return@setOnClickListener }
+            val body = "[${now()}] [${me()}] $t"
+            dispatch(body)
             msgField.setText("")
         }
+    }
+
+    private fun dispatch(body: String, b64: String? = null) {
+        val payload = if (b64 != null) body + "[IMG:$b64]" else body
+        if (currentPeer.isNotEmpty() && sessionKeys.containsKey(currentPeer)) {
+            val ct = Crypto.enc(sessionKeys[currentPeer]!!, payload)
+            sendLine("@$currentPeer DM ${me()} $ct")
+        } else {
+            sendLine(Crypto.enc(Crypto.groupKey(), payload))
+        }
+        if (b64 != null) handler.post { addImageView(b64) } else addTextLine(payload)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -150,9 +171,8 @@ class MainActivity : Activity() {
                 val baos = ByteArrayOutputStream()
                 scaled.compress(Bitmap.CompressFormat.JPEG, 60, baos)
                 val b64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
-                val payload = "[IMG:$b64]"
                 if (out == null) { addTextLine("=== нет подключения ==="); return }
-                sendLine(Crypto.enc(MASTER_KEY, "[${now()}] [${name()}] $payload"))
+                dispatch("[${now()}] [${me()}] ", b64)
             } catch (e: Exception) {
                 addTextLine("=== ошибка загрузки фото ===")
             }
@@ -197,14 +217,61 @@ class MainActivity : Activity() {
     }
 
     private fun render(line: String) {
-        if (line.startsWith("===")) { addTextLine(line); return }
-        val d = Crypto.dec(MASTER_KEY, line.trim())
-        if (d == null) {
-            addTextLine("🔒 не читается (len=" + line.length + ") " + line.take(24))
-            return
+        if (line.isEmpty()) return
+        val parts = line.split(" ")
+        when (parts[0]) {
+            "DHREQ" -> {
+                if (parts.size < 5) return
+                val from = parts[1]
+                val p = BigInteger(parts[2], 16)
+                val g = BigInteger(parts[3], 16)
+                val A = BigInteger(parts[4], 16)
+                Thread {
+                    val b = BigInteger(256, SecureRandom())
+                    val B = g.modPow(b, p)
+                    val shared = A.modPow(b, p)
+                    val key = Crypto.sha256(shared.toString(16).toByteArray())
+                    sessionKeys[from] = key
+                    sendLine("@$from DHRES ${me()} ${B.toString(16)}")
+                    addTextLine("🔐 ключ с $from, отпечаток: ${Crypto.fingerprint(key)}")
+                }.start()
+            }
+            "DHRES" -> {
+                if (parts.size < 3) return
+                val from = parts[1]
+                val B = BigInteger(parts[2], 16)
+                val a = pendingA[from] ?: return
+                val p = pendingP[from] ?: return
+                val shared = B.modPow(a, p)
+                val key = Crypto.sha256(shared.toString(16).toByteArray())
+                sessionKeys[from] = key
+                pendingA.remove(from); pendingP.remove(from)
+                addTextLine("🔐 ключ с $from, отпечаток: ${Crypto.fingerprint(key)}")
+            }
+            "DM" -> {
+                if (parts.size < 3) return
+                val from = parts[1]
+                val ct = parts[2]
+                val key = sessionKeys[from]
+                if (key == null) { addTextLine("🔒 нет ключа с $from"); return }
+                val d = Crypto.dec(key, ct)
+                if (d == null) addTextLine("🔒 не читается от $from")
+                else showContent(d)
+            }
+            "===" -> addTextLine(line)
+            else -> {
+                val d = Crypto.dec(Crypto.groupKey(), line)
+                if (d == null) addTextLine("🔒 не читается (len=" + line.length + ")")
+                else showContent(d)
+            }
         }
+    }
+
+    private fun showContent(d: String) {
         val m = Regex("\\[IMG:([^\\]]+)\\]").find(d)
-        if (m != null) addImageView(m.groupValues[1])
-        else addTextLine(d)
+        if (m != null) {
+            addTextLine(d.substring(0, m.range.first))
+            addImageView(m.groupValues[1])
+        } else addTextLine(d)
     }
 }
