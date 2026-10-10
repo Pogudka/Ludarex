@@ -151,13 +151,14 @@ class MainActivity : Activity() {
 
     private fun dispatch(body: String, b64: String? = null) {
         val payload = if (b64 != null) body + "[IMG:$b64]" else body
-        if (currentPeer.isNotEmpty() && sessionKeys.containsKey(currentPeer)) {
+        val isDm = currentPeer.isNotEmpty() && sessionKeys.containsKey(currentPeer)
+        if (isDm) {
             val ct = Crypto.enc(sessionKeys[currentPeer]!!, payload)
             sendLine("@$currentPeer DM ${me()} $ct")
+            if (b64 != null) handler.post { addImageView(b64) } else addTextLine(payload)
         } else {
             sendLine(Crypto.enc(Crypto.groupKey(), payload))
         }
-        if (b64 != null) handler.post { addImageView(b64) } else addTextLine(payload)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
