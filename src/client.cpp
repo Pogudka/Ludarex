@@ -213,7 +213,6 @@ int main(int argc, char* argv[]) {
         } else {
             std::string ct = enc(groupKey(), body);
             sendLine(ct);
-            show(body);
         }
     }
     close(sock);
