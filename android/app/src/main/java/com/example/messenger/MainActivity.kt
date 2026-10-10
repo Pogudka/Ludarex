@@ -52,6 +52,14 @@ object Crypto {
             String(c.doFinal(d.copyOfRange(12, d.size)))
         }
     } catch (e: Exception) { null }
+    fun babylonKey(n: Int): String {
+        val r = SecureRandom()
+        val sb = StringBuilder()
+        for (i in 0 until n) {
+            sb.appendCodePoint(0x12000 + r.nextInt(0x400))
+        }
+        return sb.toString()
+    }
 }
 
 class MainActivity : Activity() {
@@ -92,8 +100,7 @@ class MainActivity : Activity() {
         setContentView(root)
 
         genBtn.setOnClickListener {
-            val b = ByteArray(16); SecureRandom().nextBytes(b)
-            keyField.setText(Crypto.hex(b))
+            keyField.setText(Crypto.babylonKey(12))
         }
         imgBtn.setOnClickListener {
             startActivityForResult(Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI), PICK_IMAGE)
