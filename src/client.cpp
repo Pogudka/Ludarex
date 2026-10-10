@@ -183,25 +183,39 @@ int main(int argc, char* argv[]) {
     sendLine("REG " + myName);
     std::thread(receiver).detach();
 
-    std::cout << "Команды: /dm ИМЯ - secret chat, /group - общий чат, /exit - выход\n";
+    std::cout << "Команды: /dm ИМЯ - secret chat, /group - общий чат, /reset ИМЯ - пересоздать ключ, /exit - выход\n";
     std::string input;
     while (true) {
         std::getline(std::cin, input);
         if (input == "/exit") break;
         if (input.empty()) continue;
         if (input == "/group") { currentPeer = ""; std::cout << "режим: общий чат\n"; continue; }
+        if (input.rfind("/reset ", 0) == 0) {
+            std::string peer = input.substr(7);
+            sessionKeys.erase(peer); pendingA.erase(peer); pendingP.erase(peer);
+            if (currentPeer == peer) currentPeer = "";
+            std::cout << "сессия с " << peer << " сброшена\n";
+            continue;
+        }
         if (input.rfind("/dm ", 0) == 0) {
-            currentPeer = input.substr(4);
+            std::string peer = input.substr(4);
+            if (sessionKeys.count(peer)) {
+                std::cout << "сессия с " << peer << " уже активна (отпечаток " << fingerprint(sessionKeys[peer])
+                          << "). /reset " << peer << " чтобы пересоздать.\n";
+                currentPeer = peer;
+                continue;
+            }
+            currentPeer = peer;
             BN_CTX* ctx = BN_CTX_new();
             BIGNUM *p = BN_new(), *g = BN_new(), *a = BN_new(), *A = BN_new();
             BN_generate_prime_ex(p, 1024, 1, nullptr, nullptr, nullptr);
             BN_set_word(g, 2);
             BN_rand(a, 256, -1, 0);
             BN_mod_exp(A, g, a, p, ctx);
-            pendingA[currentPeer] = bn2hex(a);
-            pendingP[currentPeer] = bn2hex(p);
-            sendLine("@" + currentPeer + " DHREQ " + myName + " " + bn2hex(p) + " " + bn2hex(g) + " " + bn2hex(A));
-            std::cout << "предложение ключа отправлено " << currentPeer << "...\n";
+            pendingA[peer] = bn2hex(a);
+            pendingP[peer] = bn2hex(p);
+            sendLine("@" + peer + " DHREQ " + myName + " " + bn2hex(p) + " " + bn2hex(g) + " " + bn2hex(A));
+            std::cout << "предложение ключа отправлено " << peer << "...\n";
             BN_free(p); BN_free(g); BN_free(a); BN_free(A); BN_CTX_free(ctx);
             continue;
         }
