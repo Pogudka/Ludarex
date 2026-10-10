@@ -3,20 +3,50 @@
 #include <vector>
 #include <fstream>
 #include <cstring>
+#include <ctime>
 #include <thread>
 #include <mutex>
+#include <random>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
 
 const int PORT = 9999;
 const std::string DB_FILE = "chat_db.txt";
+const std::string KEY_FILE = "master_key.txt";
 
 std::vector<std::string> history;
 std::mutex historyMtx;
 std::vector<int> clients;
 std::mutex clientsMtx;
+std::string masterKey;
 
+std::string utf8cp(long cp) {
+    std::string s;
+    s += (char)(0xF0 | (cp >> 18));
+    s += (char)(0x80 | ((cp >> 12) & 0x3F));
+    s += (char)(0x80 | ((cp >> 6) & 0x3F));
+    s += (char)(0x80 | (cp & 0x3F));
+    return s;
+}
+std::string genBabylon(int n) {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<int> dist(0, 0x3FF);
+    std::string s;
+    for (int i = 0; i < n; i++) s += utf8cp(0x12000 + dist(gen));
+    return s;
+}
+void loadOrCreateKey() {
+    std::ifstream f(KEY_FILE);
+    std::string line;
+    if (std::getline(f, line) && !line.empty()) masterKey = line;
+    else {
+        masterKey = genBabylon(12);
+        std::ofstream o(KEY_FILE);
+        o << masterKey << "\n";
+    }
+}
 void saveHistory() {
     std::ofstream f(DB_FILE);
     for (const std::string& s : history) f << s << "\n";
@@ -32,8 +62,10 @@ void sendAll(const std::string& t) {
     for (int c : clients) send(c, t.c_str(), t.size(), 0);
 }
 void handleClient(int sock) {
+    std::string kl = masterKey + "\n";
+    send(sock, kl.c_str(), kl.size(), 0);
     { std::lock_guard<std::mutex> lk(clientsMtx); clients.push_back(sock); }
-    std::string acc;          // НОВОЕ: копилка для сборки длинных строк
+    std::string acc;
     char buf[8192];
     while (true) {
         int n = recv(sock, buf, sizeof(buf), 0);
@@ -64,8 +96,11 @@ void handleClient(int sock) {
     close(sock);
 }
 int main() {
+    loadOrCreateKey();
     loadHistory();
-    std::cout << "=== СЕРВЕР Ludarex v1.4 === строк: " << history.size() << "\n";
+    std::cout << "=== СЕРВЕР Ludarex v1.5 ===\n";
+    std::cout << "Мастер-ключ: " << masterKey << "\n";
+    std::cout << "Строк в базе: " << history.size() << "\n";
     int ss = socket(AF_INET, SOCK_STREAM, 0);
     int yes = 1; setsockopt(ss, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
     sockaddr_in a{}; a.sin_family = AF_INET; a.sin_addr.s_addr = INADDR_ANY; a.sin_port = htons(PORT);
