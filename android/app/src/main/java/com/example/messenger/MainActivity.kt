@@ -89,7 +89,7 @@ class MainActivity : Activity() {
             addView(chatBox)
             layoutParams = LinearLayout.LayoutParams(-1, 0, 1f)
         }
-        msgField = EditText(this).apply { hint = "Сообщение..." }
+        msgField = EditText(this).apply { hint = "Сообщение... (/reset ИМЯ)" }
         val imgBtn = Button(this).apply { text = "📷 Фото" }
         val sendBtn = Button(this).apply { text = "Отправить" }
         listOf(ipField, nameField, peerField, connectBtn, secretBtn, scroll, msgField, imgBtn, sendBtn).forEach { root.addView(it) }
@@ -98,10 +98,15 @@ class MainActivity : Activity() {
         secretBtn.setOnClickListener {
             val peer = peerField.text.toString()
             if (peer.isEmpty()) { addTextLine("укажи собеседника"); return@setOnClickListener }
+            if (sessionKeys.containsKey(peer)) {
+                currentPeer = peer
+                addTextLine("сессия с $peer уже активна, отпечаток: ${Crypto.fingerprint(sessionKeys[peer]!!)}")
+                return@setOnClickListener
+            }
             currentPeer = peer
             Thread {
                 val p = Crypto.safePrime(1024)
-                val g = BigInteger.TWO
+                val g = BigInteger.valueOf(2)
                 val a = BigInteger(256, SecureRandom())
                 val A = g.modPow(a, p)
                 pendingA[peer] = a
@@ -118,6 +123,7 @@ class MainActivity : Activity() {
             val n = me()
             handler.post { chatBox.removeAllViews() }
             buf.setLength(0)
+            sessionKeys.clear(); pendingA.clear(); pendingP.clear(); currentPeer = ""
             Thread {
                 try {
                     val s = Socket(ip, 9999)
@@ -142,6 +148,21 @@ class MainActivity : Activity() {
         sendBtn.setOnClickListener {
             val t = msgField.text.toString()
             if (t.isEmpty()) return@setOnClickListener
+            if (t == "/exit") {
+                try { socket?.close() } catch (_: Exception) {}
+                out = null; socket = null
+                addTextLine("=== ты вышел из чата ===")
+                msgField.setText("")
+                return@setOnClickListener
+            }
+            if (t.rfind("/reset ", 0) == 0) {
+                val peer = t.substring(7)
+                sessionKeys.remove(peer); pendingA.remove(peer); pendingP.remove(peer)
+                if (currentPeer == peer) currentPeer = ""
+                addTextLine("сессия с $peer сброшена")
+                msgField.setText("")
+                return@setOnClickListener
+            }
             if (out == null) { addTextLine("=== нет подключения ==="); return@setOnClickListener }
             val body = "[${now()}] [${me()}] $t"
             dispatch(body)
