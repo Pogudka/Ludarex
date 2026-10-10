@@ -12,13 +12,16 @@
 #include <openssl/sha.h>
 #include <openssl/rand.h>
 
+// ТОТ ЖЕ МАСТЕР-КЛЮЧ, что и в MainActivity.kt. Меняй ОДИНАКОВО в обоих.
+const std::string MASTER_KEY = "ludarex-babylon-2026";
+
 const int PORT = 9999;
 int sock;
-std::string pass, myName;
+std::string myName;
 
 long curHour() { return (long)(std::time(0) / 3600); }
-void keyFor(const std::string& pass, long hour, unsigned char* key) {
-    std::string s = pass + ":" + std::to_string(hour);
+void keyFor(long hour, unsigned char* key) {
+    std::string s = MASTER_KEY + ":" + std::to_string(hour);
     SHA256((const unsigned char*)s.c_str(), s.size(), key);
 }
 std::string currentTime() {
@@ -41,7 +44,7 @@ std::vector<unsigned char> unhex(const std::string& s) {
 }
 std::string enc(const std::string& text) {
     long hour = curHour();
-    unsigned char key[32]; keyFor(pass, hour, key);
+    unsigned char key[32]; keyFor(hour, key);
     unsigned char nonce[12]; RAND_bytes(nonce, 12);
     nonce[0] = (hour >> 24) & 255; nonce[1] = (hour >> 16) & 255;
     nonce[2] = (hour >> 8) & 255;  nonce[3] = hour & 255;
@@ -66,7 +69,7 @@ std::string dec(const std::string& s) {
     if (d.size() < 28) return "";
     long hour = ((long)(unsigned char)d[0] << 24) | ((long)(unsigned char)d[1] << 16) |
                 ((long)(unsigned char)d[2] << 8) | (long)(unsigned char)d[3];
-    unsigned char key[32]; keyFor(pass, hour, key);
+    unsigned char key[32]; keyFor(hour, key);
     int ctlen = d.size() - 12 - 16;
     std::vector<unsigned char> out(ctlen + 32);
     int len = 0, total = 0;
@@ -120,11 +123,6 @@ int main(int argc, char* argv[]) {
     inet_pton(AF_INET, serverIP.c_str(), &addr.sin_addr);
     std::cout << "Звоню на " << serverIP << "...\n";
     if (connect(sock, (sockaddr*)&addr, sizeof(addr)) < 0) { std::cout << "Сервер не найден\n"; return 1; }
-
-    std::string keyline; char ch;
-    while (recv(sock, &ch, 1, 0) == 1) { if (ch == '\n') break; keyline += ch; }
-    pass = keyline;
-    std::cout << "Мастер-ключ от сервера: " << pass << "\n";
 
     std::thread(receiver).detach();
     sendLine(enc("=== " + myName + " зашёл в чат ==="));
