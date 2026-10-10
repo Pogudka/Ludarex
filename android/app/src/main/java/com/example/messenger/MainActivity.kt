@@ -1,8 +1,6 @@
 package com.example.messenger
 
 import android.app.Activity
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -54,14 +52,6 @@ object Crypto {
             String(c.doFinal(d.copyOfRange(12, d.size)))
         }
     } catch (e: Exception) { null }
-    fun babylonKey(n: Int): String {
-        val r = SecureRandom()
-        val sb = StringBuilder()
-        for (i in 0 until n) {
-            sb.appendCodePoint(0x12000 + r.nextInt(0x400))
-        }
-        return sb.toString()
-    }
 }
 
 class MainActivity : Activity() {
@@ -74,12 +64,12 @@ class MainActivity : Activity() {
     private lateinit var msgField: EditText
     @Volatile private var out: java.io.OutputStream? = null
     @Volatile private var socket: Socket? = null
+    @Volatile private var myPass = ""
     private val buf = StringBuilder()
     private val PICK_IMAGE = 1001
 
     private fun now() = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-    private fun pass() = keyField.text.toString()
     private fun name() = nameField.text.toString().ifEmpty { "Аноним" }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -87,9 +77,7 @@ class MainActivity : Activity() {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(16, 16, 16, 16) }
         ipField = EditText(this).apply { setText("127.0.0.1") }
         nameField = EditText(this).apply { hint = "Имя" }
-        keyField = EditText(this).apply { hint = "Мастер-ключ" }
-        val genBtn = Button(this).apply { text = "🎲 Сгенерировать" }
-        val copyBtn = Button(this).apply { text = "📋 Копировать" }
+        keyField = EditText(this).apply { hint = "Ключ (придёт с сервера)"; isEnabled = false }
         val connectBtn = Button(this).apply { text = "Подключиться" }
         chatBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         scroll = ScrollView(this).apply {
@@ -99,24 +87,14 @@ class MainActivity : Activity() {
         msgField = EditText(this).apply { hint = "Сообщение..." }
         val imgBtn = Button(this).apply { text = "📷 Фото" }
         val sendBtn = Button(this).apply { text = "Отправить" }
-        listOf(ipField, nameField, keyField, genBtn, copyBtn, connectBtn, scroll, msgField, imgBtn, sendBtn).forEach { root.addView(it) }
+        listOf(ipField, nameField, keyField, connectBtn, scroll, msgField, imgBtn, sendBtn).forEach { root.addView(it) }
         setContentView(root)
 
-        genBtn.setOnClickListener {
-            keyField.setText(Crypto.babylonKey(12))
-        }
-        copyBtn.setOnClickListener {
-            val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-            val clip = ClipData.newPlainText("key", keyField.text.toString())
-            clipboard.setPrimaryClip(clip)
-            Toast.makeText(this, "Ключ скопирован", Toast.LENGTH_SHORT).show()
-        }
         imgBtn.setOnClickListener {
             startActivityForResult(Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI), PICK_IMAGE)
         }
         connectBtn.setOnClickListener {
             val ip = ipField.text.toString()
-            val p = pass()
             val n = name()
             handler.post { chatBox.removeAllViews() }
             buf.setLength(0)
@@ -124,13 +102,21 @@ class MainActivity : Activity() {
                 try {
                     val s = Socket(ip, 9999)
                     socket = s
+                    val ins = s.getInputStream()
                     out = s.getOutputStream()
-                    addTextLine("=== подключено ===")
-                    val join = "=== $n зашёл в чат ==="
-                    sendLine(if (p.isEmpty()) join else Crypto.enc(p, join))
+                    val sb = StringBuilder()
+                    while (true) {
+                        val b = ins.read()
+                        if (b == -1 || b == '\n'.code) break
+                        sb.append(b.toChar())
+                    }
+                    myPass = sb.toString()
+                    handler.post { keyField.setText(myPass) }
+                    addTextLine("=== подключено, ключ получен ===")
+                    sendLine(Crypto.enc(myPass, "=== $n зашёл в чат ==="))
                     val b = ByteArray(8192)
                     while (true) {
-                        val nn = s.getInputStream().read(b)
+                        val nn = ins.read(b)
                         if (nn <= 0) break
                         handler.post { addText(String(b, 0, nn)) }
                     }
@@ -156,9 +142,8 @@ class MainActivity : Activity() {
                 addTextLine("=== нет подключения: нажми Подключиться ===")
                 return@setOnClickListener
             }
-            val p = pass()
-            if (t.startsWith("/") || p.isEmpty()) sendLine(t)
-            else sendLine(Crypto.enc(p, "[${now()}] [${name()}] $t"))
+            if (t.startsWith("/") || myPass.isEmpty()) sendLine(t)
+            else sendLine(Crypto.enc(myPass, "[${now()}] [${name()}] $t"))
             msgField.setText("")
         }
     }
@@ -176,9 +161,8 @@ class MainActivity : Activity() {
                 val b64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
                 val payload = "[IMG:$b64]"
                 if (out == null) { addTextLine("=== нет подключения ==="); return }
-                val p = pass()
-                if (p.isEmpty()) sendLine(payload)
-                else sendLine(Crypto.enc(p, "[${now()}] [${name()}] $payload"))
+                if (myPass.isEmpty()) sendLine(payload)
+                else sendLine(Crypto.enc(myPass, "[${now()}] [${name()}] $payload"))
             } catch (e: Exception) {
                 addTextLine("=== ошибка загрузки фото ===")
             }
@@ -224,8 +208,7 @@ class MainActivity : Activity() {
 
     private fun render(line: String) {
         if (line.startsWith("===")) { addTextLine(line); return }
-        val p = pass()
-        val d = Crypto.dec(p, line.trim())
+        val d = Crypto.dec(myPass, line.trim())
         if (d == null) {
             addTextLine("🔒 не читается (len=" + line.length + ") " + line.take(24))
             return
