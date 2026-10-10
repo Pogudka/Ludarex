@@ -23,23 +23,34 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 
 object Crypto {
-    fun key(pass: String): SecretKeySpec {
+    fun curHour() = System.currentTimeMillis() / 1000 / 3600
+    fun keyFor(pass: String, hour: Long): SecretKeySpec {
         val md = MessageDigest.getInstance("SHA-256")
-        return SecretKeySpec(md.digest(pass.toByteArray()), "AES")
+        return SecretKeySpec(md.digest("$pass:$hour".toByteArray()), "AES")
     }
     fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
     fun unhex(s: String): ByteArray = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
     fun enc(pass: String, text: String): String {
-        val nonce = ByteArray(12); SecureRandom().nextBytes(nonce)
+        val hour = curHour()
+        val nonce = ByteArray(12)
+        SecureRandom().nextBytes(nonce)
+        nonce[0] = (hour shr 24).toByte()
+        nonce[1] = (hour shr 16).toByte()
+        nonce[2] = (hour shr 8).toByte()
+        nonce[3] = hour.toByte()
         val c = Cipher.getInstance("AES/GCM/NoPadding")
-        c.init(Cipher.ENCRYPT_MODE, key(pass), GCMParameterSpec(128, nonce))
+        c.init(Cipher.ENCRYPT_MODE, keyFor(pass, hour), GCMParameterSpec(128, nonce))
         return hex(nonce.plus(c.doFinal(text.toByteArray())))
     }
     fun dec(pass: String, s: String): String? = try {
         val d = unhex(s)
-        val c = Cipher.getInstance("AES/GCM/NoPadding")
-        c.init(Cipher.DECRYPT_MODE, key(pass), GCMParameterSpec(128, d.copyOfRange(0, 12)))
-        String(c.doFinal(d.copyOfRange(12, d.size)))
+        if (d.size < 28) null else {
+            val hour = ((d[0].toLong() and 255) shl 24) or ((d[1].toLong() and 255) shl 16) or
+                       ((d[2].toLong() and 255) shl 8) or (d[3].toLong() and 255)
+            val c = Cipher.getInstance("AES/GCM/NoPadding")
+            c.init(Cipher.DECRYPT_MODE, keyFor(pass, hour), GCMParameterSpec(128, d.copyOfRange(0, 12)))
+            String(c.doFinal(d.copyOfRange(12, d.size)))
+        }
     } catch (e: Exception) { null }
 }
 
@@ -66,7 +77,7 @@ class MainActivity : Activity() {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(16, 16, 16, 16) }
         ipField = EditText(this).apply { setText("127.0.0.1") }
         nameField = EditText(this).apply { hint = "Имя" }
-        keyField = EditText(this).apply { hint = "Секретный ключ" }
+        keyField = EditText(this).apply { hint = "Мастер-ключ" }
         val genBtn = Button(this).apply { text = "🎲 Сгенерировать ключ" }
         val connectBtn = Button(this).apply { text = "Подключиться" }
         chatBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -200,7 +211,10 @@ class MainActivity : Activity() {
         if (line.startsWith("===")) { addTextLine(line); return }
         val p = pass()
         val d = Crypto.dec(p, line.trim())
-        if (d == null) { addTextLine("🔒 не читается (другой ключ?)"); return }
+        if (d == null) {
+            addTextLine("🔒 не читается (len=" + line.length + ") " + line.take(24))
+            return
+        }
         val m = Regex("\\[IMG:([^\\]]+)\\]").find(d)
         if (m != null) addImageView(m.groupValues[1])
         else addTextLine(d)
